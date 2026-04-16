@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cuentica-mcp"
-version = "0.2.2"
+version = "0.2.3"
 description = "MCP server para la API de Cuéntica — facturación y contabilidad para autónomos en España"
 readme = "README.md"
 license = { text = "MIT" }
