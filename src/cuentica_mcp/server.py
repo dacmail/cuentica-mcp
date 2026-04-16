@@ -22,7 +22,7 @@ Reglas:
 - Nunca muestres el token completo; solo los últimos 6 caracteres si se pide.
 - Facturas con register_info.status_description == "voided" están anuladas: exclúyelas de totales y pendientes.
 - Para consultas de "pendientes de cobro", itera todas las páginas (page=1,2,3...) hasta recibir página con menos registros que page_size.
-- Borradores con fecha futura = facturas recurrentes preprogramadas, no son pendientes reales.
+- Borradores (issued=False) sin rango de fechas explícito: el servidor aplica automáticamente el año en curso. No añadas fechas manualmente salvo que el usuario pida otro período.
 - NUNCA uses page_size > 50. El servidor lo limita a 50 automáticamente, pero no lo intentes superar.
 - Operaciones de escritura (crear, modificar, eliminar, cobrar, enviar email, anular) requieren confirmación explícita del usuario antes de ejecutar.
 - Importes en € con 2 decimales. Fechas: dd/mm/yyyy al mostrar, yyyy-MM-dd al enviar.
@@ -111,7 +111,13 @@ def list_invoices(
     page: int = 1,
     page_size: int = 25,
 ) -> list:
-    """Lista facturas. issued=True emitidas, False borradores. sort ej: 'date:desc'. Fechas yyyy-MM-dd."""
+    """Lista facturas. issued=True emitidas, False borradores. sort ej: 'date:desc'. Fechas yyyy-MM-dd.
+    Para borradores (issued=False) sin fechas especificadas se aplica automáticamente el año en curso."""
+    from datetime import date
+    if issued is False and initial_date is None and end_date is None:
+        year = date.today().year
+        initial_date = f"{year}-01-01"
+        end_date = f"{year}-12-31"
     return api_get("/invoice", locals())
 
 @mcp.tool()
