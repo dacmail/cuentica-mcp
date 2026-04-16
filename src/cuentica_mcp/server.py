@@ -18,12 +18,17 @@ mcp = FastMCP(
     instructions="""
 Asistente de contabilidad conectado a Cuéntica (facturas, gastos, ingresos, clientes, proveedores, cuentas, documentos).
 
-Reglas:
-- Nunca muestres el token completo; solo los últimos 6 caracteres si se pide.
+El SERVIDOR hace automáticamente (no necesitas gestionarlo):
+- Limita page_size a 50 como máximo en todos los listados.
+- En list_invoices con issued=False sin fechas, aplica el año en curso automáticamente.
+
+El MODELO debe gestionar:
 - Facturas con register_info.status_description == "voided" están anuladas: exclúyelas de totales y pendientes.
 - Para consultas de "pendientes de cobro", itera todas las páginas (page=1,2,3...) hasta recibir página con menos registros que page_size.
-- Borradores (issued=False) sin rango de fechas explícito: el servidor aplica automáticamente el año en curso. No añadas fechas manualmente salvo que el usuario pida otro período.
-- NUNCA uses page_size > 50. El servidor lo limita a 50 automáticamente, pero no lo intentes superar.
+- Borradores con fecha futura son facturas recurrentes preprogramadas, no son pendientes reales.
+
+Reglas generales:
+- Nunca muestres el token completo; solo los últimos 6 caracteres si se pide.
 - Operaciones de escritura (crear, modificar, eliminar, cobrar, enviar email, anular) requieren confirmación explícita del usuario antes de ejecutar.
 - Importes en € con 2 decimales. Fechas: dd/mm/yyyy al mostrar, yyyy-MM-dd al enviar.
 """,
@@ -40,6 +45,22 @@ def _client() -> httpx.Client:
 def _clean(params: dict) -> dict:
     return {k: v for k, v in params.items() if v is not None}
 
+def _raise(r: httpx.Response) -> None:
+    """Lanza excepción con mensaje accionable. Nunca incluye el token."""
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError:
+        detail = ""
+        try:
+            body = r.json()
+            detail = f" — {body}"
+        except Exception:
+            if r.text:
+                detail = f" — {r.text[:200]}"
+        raise RuntimeError(
+            f"Cuéntica API error {r.status_code} en {r.request.method} {r.request.url.path}{detail}"
+        ) from None
+
 MAX_PAGE_SIZE = 50
 
 def api_get(path: str, params: dict = None):
@@ -48,31 +69,31 @@ def api_get(path: str, params: dict = None):
         p["page_size"] = min(int(p["page_size"]), MAX_PAGE_SIZE)
     with _client() as c:
         r = c.get(path, params=p)
-        r.raise_for_status()
+        _raise(r)
         return r.json()
 
 def api_get_bytes(path: str) -> bytes:
     with _client() as c:
         r = c.get(path)
-        r.raise_for_status()
+        _raise(r)
         return r.content
 
 def api_post(path: str, body: dict = None):
     with _client() as c:
         r = c.post(path, json=body or {})
-        r.raise_for_status()
+        _raise(r)
         return r.json()
 
 def api_put(path: str, body):
     with _client() as c:
         r = c.put(path, json=body)
-        r.raise_for_status()
+        _raise(r)
         return r.json()
 
 def api_delete(path: str):
     with _client() as c:
         r = c.delete(path)
-        r.raise_for_status()
+        _raise(r)
         return r.json() if r.content else None
 
 def _opt(body: dict, **kwargs) -> dict:
@@ -82,21 +103,25 @@ def _opt(body: dict, **kwargs) -> dict:
             body[k] = v
     return body
 
+# Anotaciones MCP reutilizables
+_READ   = {"readOnlyHint": True}
+_WRITE  = {"destructiveHint": True}
+
 # ── Empresa ───────────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_company() -> dict:
     """Datos del negocio: nombre, CIF, dirección, series de facturación, logo."""
     return api_get("/company")
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_invoice_series() -> list:
     """Series de facturación configuradas."""
     return api_get("/company/serie")
 
 # ── Facturas ──────────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_invoices(
     issued: Optional[bool] = None,
     initial_date: Optional[str] = None,
@@ -113,19 +138,24 @@ def list_invoices(
 ) -> list:
     """Lista facturas. issued=True emitidas, False borradores. sort ej: 'date:desc'. Fechas yyyy-MM-dd.
     Para borradores (issued=False) sin fechas especificadas se aplica automáticamente el año en curso."""
-    from datetime import date
+    from datetime import date as _date
     if issued is False and initial_date is None and end_date is None:
-        year = date.today().year
+        year = _date.today().year
         initial_date = f"{year}-01-01"
         end_date = f"{year}-12-31"
-    return api_get("/invoice", locals())
+    return api_get("/invoice", {
+        "issued": issued, "initial_date": initial_date, "end_date": end_date,
+        "customer": customer, "description": description, "serie": serie,
+        "tags": tags, "min_total_limit": min_total_limit, "max_total_limit": max_total_limit,
+        "sort": sort, "page": page, "page_size": page_size,
+    })
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_invoice(invoice_id: int) -> dict:
     """Detalle completo de una factura por su ID interno."""
     return api_get(f"/invoice/{invoice_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def create_invoice(
     issued: bool,
     invoice_lines: list[dict],
@@ -159,7 +189,7 @@ def create_invoice(
                 irm=irm, rectified_id=rectified_id, rectification_cause=rectification_cause)
     return api_post("/invoice", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_invoice(
     invoice_id: int,
     issued: bool,
@@ -184,22 +214,22 @@ def update_invoice(
                 tags=tags, number=number, footer=footer, irm=irm)
     return api_put(f"/invoice/{invoice_id}", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def delete_invoice(invoice_id: int) -> dict:
     """⚠️ Elimina una factura (irreversible). Confirmar con usuario."""
     return api_delete(f"/invoice/{invoice_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_invoice_public_link(invoice_id: int) -> dict:
     """Link público de la factura para compartir con el cliente (incluye botón de pago Stripe)."""
     return api_get(f"/invoice/{invoice_id}/public")
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_invoice_pdf(invoice_id: int) -> str:
     """Descarga el PDF de la factura. Devuelve el contenido en Base64."""
     return base64.b64encode(api_get_bytes(f"/invoice/{invoice_id}/pdf")).decode()
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_invoice_charges(invoice_id: int, charges: list[dict]) -> dict:
     """
     ⚠️ Actualiza cobros de una factura (ej: marcarla como cobrada). Confirmar con usuario.
@@ -208,7 +238,7 @@ def update_invoice_charges(invoice_id: int, charges: list[dict]) -> dict:
     """
     return api_put(f"/invoice/{invoice_id}/charges", {"charges": charges})
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def send_invoice_email(
     invoice_id: int,
     to: list[str],
@@ -227,14 +257,14 @@ def send_invoice_email(
         payload["cc"] = cc
     return api_post(f"/invoice/{invoice_id}/email", payload)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def void_invoice(invoice_id: int) -> dict:
     """⚠️ Anula factura Verifactu (irreversible). Solo facturas Verifactu. Confirmar con usuario."""
     return api_post(f"/invoice/{invoice_id}/void")
 
 # ── Gastos ────────────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_expenses(
     initial_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -250,14 +280,19 @@ def list_expenses(
     page_size: int = 25,
 ) -> list:
     """Lista gastos. draft=True borradores, False confirmados. sort ej: 'date:desc'."""
-    return api_get("/expense", locals())
+    return api_get("/expense", {
+        "initial_date": initial_date, "end_date": end_date, "provider": provider,
+        "expense_type": expense_type, "investment_type": investment_type, "draft": draft,
+        "tags": tags, "min_total_limit": min_total_limit, "max_total_limit": max_total_limit,
+        "sort": sort, "page": page, "page_size": page_size,
+    })
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_expense(expense_id: int) -> dict:
     """Detalle completo de un gasto."""
     return api_get(f"/expense/{expense_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def create_expense(
     date: str,
     draft: bool,
@@ -283,7 +318,7 @@ def create_expense(
                 document_number=document_number, annotations=annotations, tags=tags, vat_eu=vat_eu)
     return api_post("/expense", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_expense(
     expense_id: int,
     date: str,
@@ -303,34 +338,34 @@ def update_expense(
                 document_number=document_number, annotations=annotations, tags=tags, vat_eu=vat_eu)
     return api_put(f"/expense/{expense_id}", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def delete_expense(expense_id: int) -> dict:
     """⚠️ Elimina un gasto (irreversible). Confirmar con usuario."""
     return api_delete(f"/expense/{expense_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_expense_payments(expense_id: int, payments: list[dict]) -> dict:
     """⚠️ Actualiza pagos de un gasto (ej: marcarlo como pagado). payments: [{id?, amount, payment_method, paid, origin_account, date?}]"""
     return api_put(f"/expense/{expense_id}/payments", {"payments": payments})
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_expense_attachment(expense_id: int) -> dict:
     """Adjunto de un gasto en Base64 ({filename, data, mimetype})."""
     return api_get(f"/expense/{expense_id}/attachment")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_expense_attachment(expense_id: int, filename: str, data: str) -> dict:
     """⚠️ Actualiza el adjunto de un gasto. data en Base64. Confirmar con usuario."""
     return api_put(f"/expense/{expense_id}/attachment", {"filename": filename, "data": data})
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def delete_expense_attachment(expense_id: int) -> dict:
     """⚠️ Elimina el adjunto de un gasto (irreversible). Confirmar con usuario."""
     return api_delete(f"/expense/{expense_id}/attachment")
 
 # ── Ingresos ──────────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_income(
     initial_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -343,14 +378,18 @@ def list_income(
     page_size: int = 25,
 ) -> list:
     """Lista ingresos (no facturas). sort ej: 'date:desc'."""
-    return api_get("/income", locals())
+    return api_get("/income", {
+        "initial_date": initial_date, "end_date": end_date, "customer": customer,
+        "tags": tags, "min_total_limit": min_total_limit, "max_total_limit": max_total_limit,
+        "sort": sort, "page": page, "page_size": page_size,
+    })
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_income(income_id: int) -> dict:
     """Detalle completo de un ingreso."""
     return api_get(f"/income/{income_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def create_income(
     customer: int,
     income_lines: list[dict],
@@ -373,7 +412,7 @@ def create_income(
                 annotations=annotations, tags=tags)
     return api_post("/income", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_income(
     income_id: int,
     customer: int,
@@ -391,44 +430,44 @@ def update_income(
                 annotations=annotations, tags=tags)
     return api_put(f"/income/{income_id}", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def delete_income(income_id: int) -> dict:
     """⚠️ Elimina un ingreso (irreversible). Confirmar con usuario."""
     return api_delete(f"/income/{income_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_income_charges(income_id: int, charges: list[dict]) -> dict:
     """⚠️ Actualiza cobros de un ingreso. charges: [{id?, paid, amount, date, payment_method, destination_account}]"""
     return api_put(f"/income/{income_id}/charges", {"charges": charges})
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_income_attachment(income_id: int) -> dict:
     """Adjunto de un ingreso en Base64."""
     return api_get(f"/income/{income_id}/attachment")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_income_attachment(income_id: int, filename: str, data: str) -> dict:
     """⚠️ Actualiza el adjunto de un ingreso. data en Base64. Confirmar con usuario."""
     return api_put(f"/income/{income_id}/attachment", {"filename": filename, "data": data})
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def delete_income_attachment(income_id: int) -> dict:
     """⚠️ Elimina el adjunto de un ingreso (irreversible). Confirmar con usuario."""
     return api_delete(f"/income/{income_id}/attachment")
 
 # ── Clientes ──────────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_customers(q: Optional[str] = None, page: int = 1, page_size: int = 25) -> list:
     """Lista clientes. q busca en razón social, dirección, CIF, teléfono o email."""
     return api_get("/customer", {"q": q, "page": page, "page_size": page_size})
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_customer(customer_id: int) -> dict:
     """Detalle de un cliente."""
     return api_get(f"/customer/{customer_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def create_customer(
     business_type: str,
     region: str,
@@ -468,7 +507,7 @@ def create_customer(
                 has_surcharge=has_surcharge, contact_person=contact_person, personal_comment=personal_comment)
     return api_post("/customer", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_customer(
     customer_id: int,
     business_type: str,
@@ -502,24 +541,24 @@ def update_customer(
                 has_surcharge=has_surcharge, contact_person=contact_person, personal_comment=personal_comment)
     return api_put(f"/customer/{customer_id}", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def delete_customer(customer_id: int) -> dict:
     """⚠️ Elimina un cliente (irreversible). Confirmar con usuario."""
     return api_delete(f"/customer/{customer_id}")
 
 # ── Proveedores ───────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_providers(q: Optional[str] = None, page: int = 1, page_size: int = 25) -> list:
     """Lista proveedores. q busca en razón social, dirección, CIF, teléfono o email."""
     return api_get("/provider", {"q": q, "page": page, "page_size": page_size})
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_provider(provider_id: int) -> dict:
     """Detalle de un proveedor."""
     return api_get(f"/provider/{provider_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def create_provider(
     business_type: str,
     region: str,
@@ -557,7 +596,7 @@ def create_provider(
                 personal_comment=personal_comment)
     return api_post("/provider", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_provider(
     provider_id: int,
     business_type: str,
@@ -592,26 +631,26 @@ def update_provider(
                 personal_comment=personal_comment)
     return api_put(f"/provider/{provider_id}", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def delete_provider(provider_id: int) -> dict:
     """⚠️ Elimina un proveedor (irreversible). Confirmar con usuario."""
     return api_delete(f"/provider/{provider_id}")
 
 # ── Cuentas bancarias ─────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_accounts() -> list:
     """Lista cuentas bancarias, tarjetas y cuentas de socios. type: cash|bank|card|associate."""
     return api_get("/account")
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_account(account_id: int) -> dict:
     """Detalle de una cuenta bancaria."""
     return api_get(f"/account/{account_id}")
 
 # ── Documentos ────────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_documents(
     initial_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -624,44 +663,48 @@ def list_documents(
     page_size: int = 25,
 ) -> list:
     """Lista documentos del buzón. assigned=False pendientes de asignar a gasto. extension ej: '!pdf,jpg'."""
-    return api_get("/document", locals())
+    return api_get("/document", {
+        "initial_date": initial_date, "end_date": end_date, "keyword": keyword,
+        "assigned": assigned, "extension": extension, "hash": hash,
+        "sort": sort, "page": page, "page_size": page_size,
+    })
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_document(document_id: int) -> dict:
     """Detalle de un documento."""
     return api_get(f"/document/{document_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def create_document(filename: str, data: str, date: Optional[str] = None, expense_id: Optional[int] = None) -> dict:
     """⚠️ Sube documento al buzón. data en Base64. Confirmar con usuario."""
     body = _opt({"attachment": {"filename": filename, "data": data}}, date=date, expense_id=expense_id)
     return api_post("/document", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_document(document_id: int, expense_id: Optional[int] = None, date: Optional[str] = None) -> dict:
     """⚠️ Actualiza documento: asignar a gasto y/o cambiar fecha. Confirmar con usuario."""
     return api_put(f"/document/{document_id}", _opt({}, expense_id=expense_id, date=date))
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def delete_document(document_id: int) -> dict:
     """⚠️ Elimina un documento (irreversible). Confirmar con usuario."""
     return api_delete(f"/document/{document_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_document_attachment(document_id: int) -> dict:
     """Contenido del adjunto de un documento en Base64."""
     return api_get(f"/document/{document_id}/attachment")
 
 # ── Etiquetas ─────────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_tags() -> list:
     """Lista todas las etiquetas disponibles."""
     return api_get("/tag")
 
 # ── Traspasos ─────────────────────────────────────────────────────────────────
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_transfers(
     origin_account: Optional[int] = None,
     destination_account: Optional[int] = None,
@@ -675,14 +718,19 @@ def list_transfers(
     page_size: int = 25,
 ) -> list:
     """Lista traspasos entre cuentas. payment_method: cash|wire_transfer|promissory_note."""
-    return api_get("/transfer", locals())
+    return api_get("/transfer", {
+        "origin_account": origin_account, "destination_account": destination_account,
+        "initial_date": initial_date, "end_date": end_date,
+        "min_total_limit": min_total_limit, "max_total_limit": max_total_limit,
+        "payment_method": payment_method, "sort": sort, "page": page, "page_size": page_size,
+    })
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_transfer(transfer_id: int) -> dict:
     """Detalle de un traspaso."""
     return api_get(f"/transfer/{transfer_id}")
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def create_transfer(
     amount: float,
     concept: str,
@@ -697,7 +745,7 @@ def create_transfer(
                 date=date, payment_method=payment_method)
     return api_post("/transfer", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def update_transfer(
     transfer_id: int,
     amount: float,
@@ -713,7 +761,7 @@ def update_transfer(
                 date=date, payment_method=payment_method)
     return api_put(f"/transfer/{transfer_id}", body)
 
-@mcp.tool()
+@mcp.tool(annotations=_WRITE)
 def delete_transfer(transfer_id: int) -> dict:
     """⚠️ Elimina un traspaso (irreversible). Confirmar con usuario."""
     return api_delete(f"/transfer/{transfer_id}")
