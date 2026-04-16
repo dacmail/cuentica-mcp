@@ -37,11 +37,27 @@ Desarrollado por [UNGRYNERD](https://ungrynerd.com).
 
 ---
 
+## Requisito previo: instalar `uv`
+
+Este paquete se ejecuta con [`uv`](https://docs.astral.sh/uv/), la herramienta estándar para MCPs en Python. Si no lo tienes:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# macOS con Homebrew
+brew install uv
+```
+
+No hace falta instalar Python ni crear entornos virtuales — `uv` lo gestiona todo automáticamente.
+
+---
+
 ## Instalación
 
 ### Claude Desktop
 
-Edita tu archivo de configuración de Claude Desktop:
+Edita tu archivo de configuración:
 
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
@@ -60,7 +76,9 @@ Edita tu archivo de configuración de Claude Desktop:
 }
 ```
 
-Reinicia Claude Desktop. Verás el icono 🔌 en la interfaz indicando que el MCP está activo.
+`uvx` descarga e instala el paquete automáticamente la primera vez. No necesitas clonar el repositorio ni instalar nada más.
+
+Reinicia Claude Desktop tras editar el archivo.
 
 ### Claude Code
 
@@ -68,17 +86,33 @@ Reinicia Claude Desktop. Verás el icono 🔌 en la interfaz indicando que el MC
 claude mcp add -s user cuentica -e CUENTICA_API_TOKEN=tu_token -- uvx cuentica-mcp
 ```
 
+El flag `-s user` lo añade globalmente, disponible en todos tus proyectos.
+
 ### Cursor / Windsurf / otros clientes MCP
 
 Consulta la documentación de tu cliente para añadir un MCP server con:
-- **Comando**: `uvx cuentica-mcp`
+- **Comando**: `uvx`
+- **Args**: `cuentica-mcp`
 - **Variable de entorno**: `CUENTICA_API_TOKEN=tu_token`
 
-### Instalación manual con pip
+---
+
+## Desarrollo local
+
+Si quieres modificar el código:
 
 ```bash
-pip install cuentica-mcp
-CUENTICA_API_TOKEN=tu_token cuentica-mcp
+git clone https://github.com/UNGRYNERD/cuentica-mcp
+cd cuentica-mcp
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+CUENTICA_API_TOKEN=tu_token python -m cuentica_mcp.server
+```
+
+Para usarlo en Claude Desktop apuntando a tu copia local:
+
+```json
+"args": ["--from", "/ruta/a/cuentica-mcp", "cuentica-mcp"]
 ```
 
 ---
@@ -206,19 +240,6 @@ El servidor está configurado para:
 - **Paginar correctamente**: en consultas de "pendientes", itera todas las páginas automáticamente
 - **Limitar el tamaño de página** a un máximo de 50 resultados para no saturar el contexto
 - **Proteger el token**: nunca lo mostrará completo en una respuesta
-
----
-
-## Desarrollo local
-
-```bash
-git clone https://github.com/UNGRYNERD/cuentica-mcp
-cd cuentica-mcp
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-CUENTICA_API_TOKEN=tu_token python -m cuentica_mcp.server
-```
 
 ---
 
