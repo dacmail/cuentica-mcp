@@ -91,6 +91,7 @@ El flag `-s user` lo añade globalmente, disponible en todos tus proyectos.
 ### Cursor / Windsurf / otros clientes MCP
 
 Consulta la documentación de tu cliente para añadir un MCP server con:
+
 - **Comando**: `uvx`
 - **Args**: `cuentica-mcp`
 - **Variable de entorno**: `CUENTICA_API_TOKEN=tu_token`
@@ -102,7 +103,7 @@ Consulta la documentación de tu cliente para añadir un MCP server con:
 Si quieres modificar el código:
 
 ```bash
-git clone https://github.com/UNGRYNERD/cuentica-mcp
+git clone https://github.com/dacmail/cuentica-mcp
 cd cuentica-mcp
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
@@ -138,94 +139,103 @@ Una vez configurado, habla con el LLM en lenguaje natural:
 ## Herramientas disponibles
 
 ### Empresa
-| Herramienta | Descripción |
-|---|---|
-| `get_company` | Datos del negocio |
+
+| Herramienta          | Descripción           |
+| -------------------- | --------------------- |
+| `get_company`        | Datos del negocio     |
 | `get_invoice_series` | Series de facturación |
 
 ### Facturas
-| Herramienta | Descripción |
-|---|---|
-| `list_invoices` | Listar con filtros |
-| `get_invoice` | Detalle de una factura |
-| `create_invoice` | Crear factura ⚠️ |
-| `update_invoice` | Actualizar factura ⚠️ |
-| `delete_invoice` | Eliminar factura ⚠️ |
-| `get_invoice_public_link` | Link público |
-| `get_invoice_pdf` | Descargar PDF |
-| `update_invoice_charges` | Marcar como cobrada ⚠️ |
-| `send_invoice_email` | Enviar por email ⚠️ |
-| `void_invoice` | Anular (Verifactu) ⚠️ |
+
+| Herramienta               | Descripción            |
+| ------------------------- | ---------------------- |
+| `list_invoices`           | Listar con filtros     |
+| `get_invoice`             | Detalle de una factura |
+| `create_invoice`          | Crear factura ⚠️       |
+| `update_invoice`          | Actualizar factura ⚠️  |
+| `delete_invoice`          | Eliminar factura ⚠️    |
+| `get_invoice_public_link` | Link público           |
+| `get_invoice_pdf`         | Descargar PDF          |
+| `update_invoice_charges`  | Marcar como cobrada ⚠️ |
+| `send_invoice_email`      | Enviar por email ⚠️    |
+| `void_invoice`            | Anular (Verifactu) ⚠️  |
 
 ### Gastos
-| Herramienta | Descripción |
-|---|---|
-| `list_expenses` | Listar con filtros |
-| `get_expense` | Detalle de un gasto |
-| `create_expense` | Crear gasto ⚠️ |
-| `update_expense` | Actualizar gasto ⚠️ |
-| `delete_expense` | Eliminar gasto ⚠️ |
-| `update_expense_payments` | Marcar como pagado ⚠️ |
-| `get_expense_attachment` | Obtener adjunto |
+
+| Herramienta                 | Descripción           |
+| --------------------------- | --------------------- |
+| `list_expenses`             | Listar con filtros    |
+| `get_expense`               | Detalle de un gasto   |
+| `create_expense`            | Crear gasto ⚠️        |
+| `update_expense`            | Actualizar gasto ⚠️   |
+| `delete_expense`            | Eliminar gasto ⚠️     |
+| `update_expense_payments`   | Marcar como pagado ⚠️ |
+| `get_expense_attachment`    | Obtener adjunto       |
 | `update_expense_attachment` | Actualizar adjunto ⚠️ |
-| `delete_expense_attachment` | Eliminar adjunto ⚠️ |
+| `delete_expense_attachment` | Eliminar adjunto ⚠️   |
 
 ### Ingresos
-| Herramienta | Descripción |
-|---|---|
-| `list_income` | Listar con filtros |
-| `get_income` | Detalle de un ingreso |
-| `create_income` | Crear ingreso ⚠️ |
-| `update_income` | Actualizar ingreso ⚠️ |
-| `delete_income` | Eliminar ingreso ⚠️ |
-| `update_income_charges` | Actualizar cobros ⚠️ |
-| `get_income_attachment` | Obtener adjunto |
+
+| Herramienta                | Descripción           |
+| -------------------------- | --------------------- |
+| `list_income`              | Listar con filtros    |
+| `get_income`               | Detalle de un ingreso |
+| `create_income`            | Crear ingreso ⚠️      |
+| `update_income`            | Actualizar ingreso ⚠️ |
+| `delete_income`            | Eliminar ingreso ⚠️   |
+| `update_income_charges`    | Actualizar cobros ⚠️  |
+| `get_income_attachment`    | Obtener adjunto       |
 | `update_income_attachment` | Actualizar adjunto ⚠️ |
-| `delete_income_attachment` | Eliminar adjunto ⚠️ |
+| `delete_income_attachment` | Eliminar adjunto ⚠️   |
 
 ### Clientes
-| Herramienta | Descripción |
-|---|---|
-| `list_customers` | Buscar clientes |
-| `get_customer` | Detalle de un cliente |
-| `create_customer` | Crear cliente ⚠️ |
+
+| Herramienta       | Descripción           |
+| ----------------- | --------------------- |
+| `list_customers`  | Buscar clientes       |
+| `get_customer`    | Detalle de un cliente |
+| `create_customer` | Crear cliente ⚠️      |
 | `update_customer` | Actualizar cliente ⚠️ |
-| `delete_customer` | Eliminar cliente ⚠️ |
+| `delete_customer` | Eliminar cliente ⚠️   |
 
 ### Proveedores
-| Herramienta | Descripción |
-|---|---|
-| `list_providers` | Buscar proveedores |
-| `get_provider` | Detalle de un proveedor |
-| `create_provider` | Crear proveedor ⚠️ |
+
+| Herramienta       | Descripción             |
+| ----------------- | ----------------------- |
+| `list_providers`  | Buscar proveedores      |
+| `get_provider`    | Detalle de un proveedor |
+| `create_provider` | Crear proveedor ⚠️      |
 | `update_provider` | Actualizar proveedor ⚠️ |
-| `delete_provider` | Eliminar proveedor ⚠️ |
+| `delete_provider` | Eliminar proveedor ⚠️   |
 
 ### Cuentas bancarias
-| Herramienta | Descripción |
-|---|---|
-| `list_accounts` | Listar cuentas |
-| `get_account` | Detalle de una cuenta |
+
+| Herramienta     | Descripción           |
+| --------------- | --------------------- |
+| `list_accounts` | Listar cuentas        |
+| `get_account`   | Detalle de una cuenta |
 
 ### Documentos
-| Herramienta | Descripción |
-|---|---|
-| `list_documents` | Listar buzón |
-| `get_document` | Detalle de un documento |
-| `create_document` | Subir documento ⚠️ |
-| `update_document` | Asignar a gasto / cambiar fecha ⚠️ |
-| `delete_document` | Eliminar documento ⚠️ |
-| `get_document_attachment` | Obtener adjunto en Base64 |
+
+| Herramienta               | Descripción                        |
+| ------------------------- | ---------------------------------- |
+| `list_documents`          | Listar buzón                       |
+| `get_document`            | Detalle de un documento            |
+| `create_document`         | Subir documento ⚠️                 |
+| `update_document`         | Asignar a gasto / cambiar fecha ⚠️ |
+| `delete_document`         | Eliminar documento ⚠️              |
+| `get_document_attachment` | Obtener adjunto en Base64          |
 
 ### Etiquetas y traspasos
-| Herramienta | Descripción |
-|---|---|
-| `list_tags` | Etiquetas disponibles |
-| `list_transfers` | Listar traspasos |
-| `get_transfer` | Detalle de un traspaso |
-| `create_transfer` | Crear traspaso ⚠️ |
+
+| Herramienta       | Descripción            |
+| ----------------- | ---------------------- |
+| `list_tags`       | Etiquetas disponibles  |
+| `list_transfers`  | Listar traspasos       |
+| `get_transfer`    | Detalle de un traspaso |
+| `create_transfer` | Crear traspaso ⚠️      |
 | `update_transfer` | Actualizar traspaso ⚠️ |
-| `delete_transfer` | Eliminar traspaso ⚠️ |
+| `delete_transfer` | Eliminar traspaso ⚠️   |
 
 > ⚠️ Las herramientas marcadas crean, modifican o eliminan datos. El LLM pedirá confirmación explícita antes de ejecutarlas.
 

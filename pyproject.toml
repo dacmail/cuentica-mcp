@@ -18,8 +18,8 @@ dependencies = [
 cuentica-mcp = "cuentica_mcp.server:main"
 
 [project.urls]
-Homepage = "https://github.com/UNGRYNERD/cuentica-mcp"
-Repository = "https://github.com/UNGRYNERD/cuentica-mcp"
+Homepage = "https://github.com/dacmail/cuentica-mcp"
+Repository = "https://github.com/dacmail/cuentica-mcp"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cuentica_mcp"]
