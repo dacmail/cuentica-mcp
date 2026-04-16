@@ -78,7 +78,11 @@ Edita tu archivo de configuración:
 
 `uvx` descarga e instala el paquete automáticamente la primera vez. No necesitas clonar el repositorio ni instalar nada más.
 
-Reinicia Claude Desktop tras editar el archivo.
+Reinicia Claude Desktop tras editar el archivo. Para actualizar a una nueva versión:
+
+```bash
+uvx --reinstall cuentica-mcp
+```
 
 ### Claude Code
 
