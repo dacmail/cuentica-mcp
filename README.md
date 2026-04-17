@@ -9,15 +9,17 @@ Desarrollado por [UNGRYNERD](https://ungrynerd.com).
 ## Qué puedes hacer
 
 - 📄 Listar, crear, actualizar y eliminar facturas y borradores
-- 💰 Consultar facturas pendientes de cobro (paginación automática)
-- ✅ Marcar facturas y gastos como cobrados/pagados
+- 💰 Consultar facturas pendientes de cobro con `get_pending_collections` (paginación automática)
+- ✅ Marcar facturas y gastos como cobrados/pagados en una sola llamada (`mark_invoice_paid`, `mark_expense_paid`)
 - 📧 Enviar facturas por email al cliente
 - 🧾 Crear, consultar y gestionar gastos e ingresos
 - 👥 Gestión completa de clientes y proveedores (CRUD)
-- 🏦 Ver cuentas bancarias y traspasos
+- 🏦 Ver saldo total de todas las cuentas con `get_balance_summary`
+- 📊 Resumen de IVA trimestral con `get_quarterly_vat_summary` (repercutido, soportado, neto)
 - 📁 Gestionar documentos del buzón de Cuéntica
-- 🏷️ Gestionar etiquetas
-- 📊 Resúmenes trimestrales de IVA
+- 🏷️ Gestionar etiquetas y traspasos
+- 🗂️ Catálogos ligeros vía MCP Resources (clientes, proveedores, cuentas, etiquetas)
+- ⚡ Modo `summary=True` en listados para respuestas compactas (menos tokens)
 
 ---
 
@@ -136,6 +138,7 @@ Una vez configurado, habla con el LLM en lenguaje natural:
 "Resumen de IVA del primer trimestre"
 "¿Cuánto dinero tengo en mis cuentas?"
 "Crea una factura de 1.000 € + IVA para el cliente X"
+"Dame un listado resumido de todos los gastos de enero"
 ```
 
 ---
@@ -151,66 +154,68 @@ Una vez configurado, habla con el LLM en lenguaje natural:
 
 ### Facturas
 
-| Herramienta               | Descripción            |
-| ------------------------- | ---------------------- |
-| `list_invoices`           | Listar con filtros     |
-| `get_invoice`             | Detalle de una factura |
-| `create_invoice`          | Crear factura ⚠️       |
-| `update_invoice`          | Actualizar factura ⚠️  |
-| `delete_invoice`          | Eliminar factura ⚠️    |
-| `get_invoice_public_link` | Link público           |
-| `get_invoice_pdf`         | Descargar PDF          |
-| `update_invoice_charges`  | Marcar como cobrada ⚠️ |
-| `send_invoice_email`      | Enviar por email ⚠️    |
-| `void_invoice`            | Anular (Verifactu) ⚠️  |
+| Herramienta               | Descripción                              |
+| ------------------------- | ---------------------------------------- |
+| `list_invoices`           | Listar con filtros (`summary=True` disponible) |
+| `get_invoice`             | Detalle de una factura                   |
+| `create_invoice`          | Crear factura ⚠️                         |
+| `update_invoice`          | Actualizar factura ⚠️                    |
+| `delete_invoice`          | Eliminar factura ⚠️                      |
+| `get_invoice_public_link` | Link público                             |
+| `get_invoice_pdf`         | Descargar PDF                            |
+| `update_invoice_charges`  | Actualizar cobros ⚠️                     |
+| `mark_invoice_paid`       | Marcar como cobrada (GET+PUT) ⚠️         |
+| `send_invoice_email`      | Enviar por email ⚠️                      |
+| `void_invoice`            | Anular (Verifactu) ⚠️                    |
 
 ### Gastos
 
-| Herramienta                 | Descripción           |
-| --------------------------- | --------------------- |
-| `list_expenses`             | Listar con filtros    |
-| `get_expense`               | Detalle de un gasto   |
-| `create_expense`            | Crear gasto ⚠️        |
-| `update_expense`            | Actualizar gasto ⚠️   |
-| `delete_expense`            | Eliminar gasto ⚠️     |
-| `update_expense_payments`   | Marcar como pagado ⚠️ |
-| `get_expense_attachment`    | Obtener adjunto       |
-| `update_expense_attachment` | Actualizar adjunto ⚠️ |
-| `delete_expense_attachment` | Eliminar adjunto ⚠️   |
+| Herramienta                 | Descripción                                |
+| --------------------------- | ------------------------------------------ |
+| `list_expenses`             | Listar con filtros (`summary=True` disponible) |
+| `get_expense`               | Detalle de un gasto                        |
+| `create_expense`            | Crear gasto ⚠️                             |
+| `update_expense`            | Actualizar gasto ⚠️                        |
+| `delete_expense`            | Eliminar gasto ⚠️                          |
+| `update_expense_payments`   | Actualizar pagos ⚠️                        |
+| `mark_expense_paid`         | Marcar como pagado (GET+PUT) ⚠️            |
+| `get_expense_attachment`    | Obtener adjunto                            |
+| `update_expense_attachment` | Actualizar adjunto ⚠️                      |
+| `delete_expense_attachment` | Eliminar adjunto ⚠️                        |
 
 ### Ingresos
 
-| Herramienta                | Descripción           |
-| -------------------------- | --------------------- |
-| `list_income`              | Listar con filtros    |
-| `get_income`               | Detalle de un ingreso |
-| `create_income`            | Crear ingreso ⚠️      |
-| `update_income`            | Actualizar ingreso ⚠️ |
-| `delete_income`            | Eliminar ingreso ⚠️   |
-| `update_income_charges`    | Actualizar cobros ⚠️  |
-| `get_income_attachment`    | Obtener adjunto       |
-| `update_income_attachment` | Actualizar adjunto ⚠️ |
-| `delete_income_attachment` | Eliminar adjunto ⚠️   |
+| Herramienta                | Descripción                                |
+| -------------------------- | ------------------------------------------ |
+| `list_income`              | Listar con filtros (`summary=True` disponible) |
+| `get_income`               | Detalle de un ingreso                      |
+| `create_income`            | Crear ingreso ⚠️                           |
+| `update_income`            | Actualizar ingreso ⚠️                      |
+| `delete_income`            | Eliminar ingreso ⚠️                        |
+| `update_income_charges`    | Actualizar cobros ⚠️                       |
+| `get_income_attachment`    | Obtener adjunto                            |
+| `update_income_attachment` | Actualizar adjunto ⚠️                      |
+| `delete_income_attachment` | Eliminar adjunto ⚠️                        |
 
 ### Clientes
 
-| Herramienta       | Descripción           |
-| ----------------- | --------------------- |
-| `list_customers`  | Buscar clientes       |
-| `get_customer`    | Detalle de un cliente |
-| `create_customer` | Crear cliente ⚠️      |
-| `update_customer` | Actualizar cliente ⚠️ |
-| `delete_customer` | Eliminar cliente ⚠️   |
+| Herramienta       | Descripción                                |
+| ----------------- | ------------------------------------------ |
+| `list_customers`  | Buscar clientes (`summary=True` disponible)|
+| `get_customer`    | Detalle de un cliente                      |
+| `create_customer` | Crear cliente ⚠️                           |
+| `update_customer` | Actualizar cliente ⚠️                      |
+| `delete_customer` | Eliminar cliente ⚠️                        |
 
 ### Proveedores
 
-| Herramienta       | Descripción             |
-| ----------------- | ----------------------- |
-| `list_providers`  | Buscar proveedores      |
-| `get_provider`    | Detalle de un proveedor |
-| `create_provider` | Crear proveedor ⚠️      |
-| `update_provider` | Actualizar proveedor ⚠️ |
-| `delete_provider` | Eliminar proveedor ⚠️   |
+| Herramienta       | Descripción                                   |
+| ----------------- | --------------------------------------------- |
+| `list_providers`  | Buscar proveedores (`summary=True` disponible)|
+| `get_provider`    | Detalle de un proveedor                       |
+| `create_provider` | Crear proveedor ⚠️                            |
+| `update_provider` | Actualizar proveedor ⚠️                       |
+| `delete_provider` | Eliminar proveedor ⚠️                         |
 
 ### Cuentas bancarias
 
@@ -240,6 +245,27 @@ Una vez configurado, habla con el LLM en lenguaje natural:
 | `create_transfer` | Crear traspaso ⚠️      |
 | `update_transfer` | Actualizar traspaso ⚠️ |
 | `delete_transfer` | Eliminar traspaso ⚠️   |
+
+### Agregaciones (nuevas en v0.3.0)
+
+Herramientas que orquestan varias llamadas a la API en una sola operación, reduciendo el consumo de tokens y el número de pasos necesarios.
+
+| Herramienta                 | Descripción                                                    |
+| --------------------------- | -------------------------------------------------------------- |
+| `get_pending_collections`   | Todas las facturas pendientes de cobro (itera páginas auto)    |
+| `get_quarterly_vat_summary` | Resumen de IVA de un trimestre (repercutido, soportado, neto)  |
+| `get_balance_summary`       | Saldo total y por cuenta de todas las cuentas bancarias        |
+
+### MCP Resources — catálogos ligeros
+
+Los resources son catálogos que el cliente MCP puede leer bajo demanda, sin consumir tokens del chat. Útiles para conocer los IDs de clientes, proveedores y cuentas antes de crear facturas o gastos.
+
+| Resource URI                    | Contenido                              |
+| ------------------------------- | -------------------------------------- |
+| `cuentica://catalog/customers`  | Clientes (id, tradename, cif, email)   |
+| `cuentica://catalog/providers`  | Proveedores (id, tradename, cif, email)|
+| `cuentica://catalog/accounts`   | Cuentas (id, name, type, balance)      |
+| `cuentica://catalog/tags`       | Etiquetas (id, name)                   |
 
 > ⚠️ Las herramientas marcadas crean, modifican o eliminan datos. El LLM pedirá confirmación explícita antes de ejecutarlas.
 

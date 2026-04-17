@@ -21,11 +21,17 @@ Asistente de contabilidad conectado a Cuéntica (facturas, gastos, ingresos, cli
 El SERVIDOR hace automáticamente (no necesitas gestionarlo):
 - Limita page_size a 50 como máximo en todos los listados.
 - En list_invoices con issued=False sin fechas, aplica el año en curso automáticamente.
+- get_pending_collections itera todas las páginas automáticamente y excluye anuladas/cobradas.
+- get_quarterly_vat_summary agrega facturas y gastos del trimestre calculando IVA neto.
+- get_balance_summary suma saldos de todas las cuentas.
+- mark_invoice_paid y mark_expense_paid combinan GET + PUT en una sola operación.
+- summary=True en cualquier listado devuelve solo campos clave (menos tokens).
 
 El MODELO debe gestionar:
 - Facturas con register_info.status_description == "voided" están anuladas: exclúyelas de totales y pendientes.
-- Para consultas de "pendientes de cobro", itera todas las páginas (page=1,2,3...) hasta recibir página con menos registros que page_size.
+- Para "pendientes de cobro" usa get_pending_collections en vez de iterar list_invoices manualmente.
 - Borradores con fecha futura son facturas recurrentes preprogramadas, no son pendientes reales.
+- Los resources cuentica://catalog/* contienen catálogos ligeros de clientes, proveedores, cuentas y etiquetas.
 
 Reglas generales:
 - Nunca muestres el token completo; solo los últimos 6 caracteres si se pide.
@@ -103,13 +109,72 @@ def _opt(body: dict, **kwargs) -> dict:
             body[k] = v
     return body
 
-# Anotaciones MCP reutilizables
-_READ   = {"readOnlyHint": True}
-_WRITE  = {"destructiveHint": True}
+def _all_pages(path: str, params: dict) -> list:
+    """Itera todas las páginas de un endpoint y devuelve la lista completa."""
+    results = []
+    page = 1
+    p = dict(params)
+    p["page_size"] = MAX_PAGE_SIZE
+    while True:
+        p["page"] = page
+        batch = api_get(path, p)
+        results.extend(batch)
+        if len(batch) < MAX_PAGE_SIZE:
+            break
+        page += 1
+    return results
+
+# ── Summary helpers ───────────────────────────────────────────────────────────
+
+def _summary_invoice(inv: dict) -> dict:
+    cust = inv.get("customer") or {}
+    ri = inv.get("register_info") or {}
+    return {
+        "id": inv.get("id"),
+        "number": inv.get("number"),
+        "date": inv.get("date"),
+        "customer": cust.get("tradename") or cust.get("business_name"),
+        "total": inv.get("total"),
+        "status": ri.get("status_description"),
+        "paid": ri.get("paid"),
+    }
+
+def _summary_expense(exp: dict) -> dict:
+    prov = exp.get("provider") or {}
+    return {
+        "id": exp.get("id"),
+        "date": exp.get("date"),
+        "provider": prov.get("tradename") or prov.get("business_name"),
+        "total": exp.get("total"),
+        "draft": exp.get("draft"),
+        "document_number": exp.get("document_number"),
+    }
+
+def _summary_income(inc: dict) -> dict:
+    cust = inc.get("customer") or {}
+    return {
+        "id": inc.get("id"),
+        "date": inc.get("date"),
+        "customer": cust.get("tradename") or cust.get("business_name"),
+        "total": inc.get("total"),
+        "document_number": inc.get("document_number"),
+    }
+
+def _summary_customer(c: dict) -> dict:
+    return {"id": c.get("id"), "tradename": c.get("tradename"), "cif": c.get("cif"), "email": c.get("email")}
+
+def _summary_provider(p: dict) -> dict:
+    return {"id": p.get("id"), "tradename": p.get("tradename"), "cif": p.get("cif"), "email": p.get("email")}
+
+# ── Anotaciones MCP ───────────────────────────────────────────────────────────
+
+_READ       = {"readOnlyHint": True}
+_IDEMPOTENT = {"readOnlyHint": True, "idempotentHint": True}
+_WRITE      = {"destructiveHint": True}
 
 # ── Empresa ───────────────────────────────────────────────────────────────────
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_company() -> dict:
     """Datos del negocio: nombre, CIF, dirección, series de facturación, logo."""
     return api_get("/company")
@@ -135,22 +200,25 @@ def list_invoices(
     sort: Optional[str] = None,
     page: int = 1,
     page_size: int = 25,
+    summary: bool = False,
 ) -> list:
     """Lista facturas. issued=True emitidas, False borradores. sort ej: 'date:desc'. Fechas yyyy-MM-dd.
-    Para borradores (issued=False) sin fechas especificadas se aplica automáticamente el año en curso."""
+    Para borradores (issued=False) sin fechas especificadas se aplica automáticamente el año en curso.
+    summary=True devuelve solo id, number, date, customer, total, status, paid (menos tokens)."""
     from datetime import date as _date
     if issued is False and initial_date is None and end_date is None:
         year = _date.today().year
         initial_date = f"{year}-01-01"
         end_date = f"{year}-12-31"
-    return api_get("/invoice", {
+    result = api_get("/invoice", {
         "issued": issued, "initial_date": initial_date, "end_date": end_date,
         "customer": customer, "description": description, "serie": serie,
         "tags": tags, "min_total_limit": min_total_limit, "max_total_limit": max_total_limit,
         "sort": sort, "page": page, "page_size": page_size,
     })
+    return [_summary_invoice(i) for i in result] if summary else result
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_invoice(invoice_id: int) -> dict:
     """Detalle completo de una factura por su ID interno."""
     return api_get(f"/invoice/{invoice_id}")
@@ -219,12 +287,12 @@ def delete_invoice(invoice_id: int) -> dict:
     """⚠️ Elimina una factura (irreversible). Confirmar con usuario."""
     return api_delete(f"/invoice/{invoice_id}")
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_invoice_public_link(invoice_id: int) -> dict:
     """Link público de la factura para compartir con el cliente (incluye botón de pago Stripe)."""
     return api_get(f"/invoice/{invoice_id}/public")
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_invoice_pdf(invoice_id: int) -> str:
     """Descarga el PDF de la factura. Devuelve el contenido en Base64."""
     return base64.b64encode(api_get_bytes(f"/invoice/{invoice_id}/pdf")).decode()
@@ -237,6 +305,34 @@ def update_invoice_charges(invoice_id: int, charges: list[dict]) -> dict:
     Con id=actualiza, sin id=crea, omitidos=eliminados.
     """
     return api_put(f"/invoice/{invoice_id}/charges", {"charges": charges})
+
+@mcp.tool(annotations=_WRITE)
+def mark_invoice_paid(
+    invoice_id: int,
+    payment_date: str,
+    payment_method: Optional[str] = None,
+) -> dict:
+    """
+    ⚠️ Marca todos los cobros de una factura como cobrados. Más rápido que update_invoice_charges.
+    Obtiene la factura automáticamente, marca todos los cobros como paid=True y actualiza.
+    payment_date en formato yyyy-MM-dd. Confirmar con usuario.
+    """
+    invoice = api_get(f"/invoice/{invoice_id}")
+    charges = invoice.get("charges", [])
+    updated = []
+    for c in charges:
+        dest = c.get("destination_account")
+        if isinstance(dest, dict):
+            dest = dest.get("id")
+        updated.append({
+            "id": c.get("id"),
+            "amount": c.get("amount"),
+            "payment_method": payment_method or c.get("payment_method"),
+            "destination_account": dest,
+            "paid": True,
+            "date": payment_date,
+        })
+    return api_put(f"/invoice/{invoice_id}/charges", {"charges": updated})
 
 @mcp.tool(annotations=_WRITE)
 def send_invoice_email(
@@ -278,16 +374,19 @@ def list_expenses(
     sort: Optional[str] = None,
     page: int = 1,
     page_size: int = 25,
+    summary: bool = False,
 ) -> list:
-    """Lista gastos. draft=True borradores, False confirmados. sort ej: 'date:desc'."""
-    return api_get("/expense", {
+    """Lista gastos. draft=True borradores, False confirmados. sort ej: 'date:desc'.
+    summary=True devuelve solo id, date, provider, total, draft, document_number (menos tokens)."""
+    result = api_get("/expense", {
         "initial_date": initial_date, "end_date": end_date, "provider": provider,
         "expense_type": expense_type, "investment_type": investment_type, "draft": draft,
         "tags": tags, "min_total_limit": min_total_limit, "max_total_limit": max_total_limit,
         "sort": sort, "page": page, "page_size": page_size,
     })
+    return [_summary_expense(e) for e in result] if summary else result
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_expense(expense_id: int) -> dict:
     """Detalle completo de un gasto."""
     return api_get(f"/expense/{expense_id}")
@@ -348,7 +447,35 @@ def update_expense_payments(expense_id: int, payments: list[dict]) -> dict:
     """⚠️ Actualiza pagos de un gasto (ej: marcarlo como pagado). payments: [{id?, amount, payment_method, paid, origin_account, date?}]"""
     return api_put(f"/expense/{expense_id}/payments", {"payments": payments})
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_WRITE)
+def mark_expense_paid(
+    expense_id: int,
+    payment_date: str,
+    payment_method: Optional[str] = None,
+) -> dict:
+    """
+    ⚠️ Marca todos los pagos de un gasto como pagados. Más rápido que update_expense_payments.
+    Obtiene el gasto automáticamente, marca todos los pagos como paid=True y actualiza.
+    payment_date en formato yyyy-MM-dd. Confirmar con usuario.
+    """
+    expense = api_get(f"/expense/{expense_id}")
+    payments = expense.get("payments", [])
+    updated = []
+    for p in payments:
+        orig = p.get("origin_account")
+        if isinstance(orig, dict):
+            orig = orig.get("id")
+        updated.append({
+            "id": p.get("id"),
+            "amount": p.get("amount"),
+            "payment_method": payment_method or p.get("payment_method"),
+            "origin_account": orig,
+            "paid": True,
+            "date": payment_date,
+        })
+    return api_put(f"/expense/{expense_id}/payments", {"payments": updated})
+
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_expense_attachment(expense_id: int) -> dict:
     """Adjunto de un gasto en Base64 ({filename, data, mimetype})."""
     return api_get(f"/expense/{expense_id}/attachment")
@@ -376,15 +503,18 @@ def list_income(
     sort: Optional[str] = None,
     page: int = 1,
     page_size: int = 25,
+    summary: bool = False,
 ) -> list:
-    """Lista ingresos (no facturas). sort ej: 'date:desc'."""
-    return api_get("/income", {
+    """Lista ingresos (no facturas). sort ej: 'date:desc'.
+    summary=True devuelve solo id, date, customer, total, document_number (menos tokens)."""
+    result = api_get("/income", {
         "initial_date": initial_date, "end_date": end_date, "customer": customer,
         "tags": tags, "min_total_limit": min_total_limit, "max_total_limit": max_total_limit,
         "sort": sort, "page": page, "page_size": page_size,
     })
+    return [_summary_income(i) for i in result] if summary else result
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_income(income_id: int) -> dict:
     """Detalle completo de un ingreso."""
     return api_get(f"/income/{income_id}")
@@ -440,7 +570,7 @@ def update_income_charges(income_id: int, charges: list[dict]) -> dict:
     """⚠️ Actualiza cobros de un ingreso. charges: [{id?, paid, amount, date, payment_method, destination_account}]"""
     return api_put(f"/income/{income_id}/charges", {"charges": charges})
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_income_attachment(income_id: int) -> dict:
     """Adjunto de un ingreso en Base64."""
     return api_get(f"/income/{income_id}/attachment")
@@ -458,11 +588,18 @@ def delete_income_attachment(income_id: int) -> dict:
 # ── Clientes ──────────────────────────────────────────────────────────────────
 
 @mcp.tool(annotations=_READ)
-def list_customers(q: Optional[str] = None, page: int = 1, page_size: int = 25) -> list:
-    """Lista clientes. q busca en razón social, dirección, CIF, teléfono o email."""
-    return api_get("/customer", {"q": q, "page": page, "page_size": page_size})
+def list_customers(
+    q: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 25,
+    summary: bool = False,
+) -> list:
+    """Lista clientes. q busca en razón social, dirección, CIF, teléfono o email.
+    summary=True devuelve solo id, tradename, cif, email (menos tokens)."""
+    result = api_get("/customer", {"q": q, "page": page, "page_size": page_size})
+    return [_summary_customer(c) for c in result] if summary else result
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_customer(customer_id: int) -> dict:
     """Detalle de un cliente."""
     return api_get(f"/customer/{customer_id}")
@@ -549,11 +686,18 @@ def delete_customer(customer_id: int) -> dict:
 # ── Proveedores ───────────────────────────────────────────────────────────────
 
 @mcp.tool(annotations=_READ)
-def list_providers(q: Optional[str] = None, page: int = 1, page_size: int = 25) -> list:
-    """Lista proveedores. q busca en razón social, dirección, CIF, teléfono o email."""
-    return api_get("/provider", {"q": q, "page": page, "page_size": page_size})
+def list_providers(
+    q: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 25,
+    summary: bool = False,
+) -> list:
+    """Lista proveedores. q busca en razón social, dirección, CIF, teléfono o email.
+    summary=True devuelve solo id, tradename, cif, email (menos tokens)."""
+    result = api_get("/provider", {"q": q, "page": page, "page_size": page_size})
+    return [_summary_provider(p) for p in result] if summary else result
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_provider(provider_id: int) -> dict:
     """Detalle de un proveedor."""
     return api_get(f"/provider/{provider_id}")
@@ -643,7 +787,7 @@ def list_accounts() -> list:
     """Lista cuentas bancarias, tarjetas y cuentas de socios. type: cash|bank|card|associate."""
     return api_get("/account")
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_account(account_id: int) -> dict:
     """Detalle de una cuenta bancaria."""
     return api_get(f"/account/{account_id}")
@@ -669,7 +813,7 @@ def list_documents(
         "sort": sort, "page": page, "page_size": page_size,
     })
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_document(document_id: int) -> dict:
     """Detalle de un documento."""
     return api_get(f"/document/{document_id}")
@@ -690,7 +834,7 @@ def delete_document(document_id: int) -> dict:
     """⚠️ Elimina un documento (irreversible). Confirmar con usuario."""
     return api_delete(f"/document/{document_id}")
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_document_attachment(document_id: int) -> dict:
     """Contenido del adjunto de un documento en Base64."""
     return api_get(f"/document/{document_id}/attachment")
@@ -725,7 +869,7 @@ def list_transfers(
         "payment_method": payment_method, "sort": sort, "page": page, "page_size": page_size,
     })
 
-@mcp.tool(annotations=_READ)
+@mcp.tool(annotations=_IDEMPOTENT)
 def get_transfer(transfer_id: int) -> dict:
     """Detalle de un traspaso."""
     return api_get(f"/transfer/{transfer_id}")
@@ -765,6 +909,155 @@ def update_transfer(
 def delete_transfer(transfer_id: int) -> dict:
     """⚠️ Elimina un traspaso (irreversible). Confirmar con usuario."""
     return api_delete(f"/transfer/{transfer_id}")
+
+# ── Agregaciones ──────────────────────────────────────────────────────────────
+
+@mcp.tool(annotations=_READ)
+def get_pending_collections(year: Optional[int] = None) -> dict:
+    """
+    Resumen de facturas emitidas pendientes de cobro. Itera todas las páginas automáticamente.
+    Excluye facturas anuladas (voided) y ya cobradas (paid=True).
+    year: filtra por año (ej: 2026). Sin year devuelve todos los pendientes.
+    Devuelve: {count, total_pending, invoices: [{id, number, date, customer, total, status}]}
+    """
+    params: dict = {"issued": True}
+    if year:
+        params["initial_date"] = f"{year}-01-01"
+        params["end_date"] = f"{year}-12-31"
+    all_invoices = _all_pages("/invoice", params)
+
+    pending = []
+    for inv in all_invoices:
+        ri = inv.get("register_info") or {}
+        if ri.get("status_description") == "voided":
+            continue
+        if ri.get("paid"):
+            continue
+        cust = inv.get("customer") or {}
+        pending.append({
+            "id": inv.get("id"),
+            "number": inv.get("number"),
+            "date": inv.get("date"),
+            "customer": cust.get("tradename") or cust.get("business_name"),
+            "total": inv.get("total"),
+            "status": ri.get("status_description"),
+        })
+
+    total = sum((p.get("total") or 0) for p in pending)
+    return {"count": len(pending), "total_pending": round(total, 2), "invoices": pending}
+
+@mcp.tool(annotations=_READ)
+def get_quarterly_vat_summary(year: int, quarter: int) -> dict:
+    """
+    Resumen de IVA de un trimestre (quarter: 1-4). Una sola llamada en vez de iterar manualmente.
+    Agrega todas las facturas emitidas y gastos del período, calcula IVA repercutido y soportado.
+    Devuelve: {period, invoices: {count, taxable_base, vat_charged, retention}, expenses: {count, taxable_base, vat_deductible}, result: {net_vat_payable}}
+    """
+    q_ranges = {
+        1: ("01-01", "03-31"),
+        2: ("04-01", "06-30"),
+        3: ("07-01", "09-30"),
+        4: ("10-01", "12-31"),
+    }
+    if quarter not in q_ranges:
+        raise ValueError("quarter debe ser 1, 2, 3 o 4")
+    start_suffix, end_suffix = q_ranges[quarter]
+    start = f"{year}-{start_suffix}"
+    end   = f"{year}-{end_suffix}"
+
+    invoices = _all_pages("/invoice", {"issued": True, "initial_date": start, "end_date": end})
+    expenses = _all_pages("/expense", {"draft": False, "initial_date": start, "end_date": end})
+
+    inv_base = inv_vat = inv_retention = 0.0
+    valid_invoices = 0
+    for inv in invoices:
+        ri = inv.get("register_info") or {}
+        if ri.get("status_description") == "voided":
+            continue
+        valid_invoices += 1
+        for line in inv.get("invoice_lines") or []:
+            qty      = line.get("quantity") or 1
+            price    = line.get("amount") or 0
+            disc_pct = (line.get("discount") or 0) / 100
+            base     = qty * price * (1 - disc_pct)
+            tax_pct  = (line.get("tax") or 0) / 100
+            ret_pct  = (line.get("retention") or 0) / 100
+            inv_base      += base
+            inv_vat       += base * tax_pct
+            inv_retention += base * ret_pct
+
+    exp_base = exp_vat = 0.0
+    for exp in expenses:
+        for line in exp.get("expense_lines") or []:
+            base    = line.get("base") or 0
+            tax_pct = (line.get("tax") or 0) / 100
+            exp_base += base
+            exp_vat  += base * tax_pct
+
+    return {
+        "period": f"T{quarter}/{year}",
+        "invoices": {
+            "count": valid_invoices,
+            "taxable_base": round(inv_base, 2),
+            "vat_charged": round(inv_vat, 2),
+            "retention": round(inv_retention, 2),
+        },
+        "expenses": {
+            "count": len(expenses),
+            "taxable_base": round(exp_base, 2),
+            "vat_deductible": round(exp_vat, 2),
+        },
+        "result": {
+            "net_vat_payable": round(inv_vat - exp_vat, 2),
+            "note": "IVA repercutido − IVA soportado. No incluye ingresos (income). Verifica con tu asesor.",
+        },
+    }
+
+@mcp.tool(annotations=_READ)
+def get_balance_summary() -> dict:
+    """
+    Resumen de saldos de todas las cuentas bancarias, tarjetas y efectivo. Una sola llamada.
+    Devuelve: {total_balance, accounts: [{id, name, type, balance}]}
+    """
+    accounts = api_get("/account")
+    result = []
+    total = 0.0
+    for acc in accounts:
+        balance = acc.get("balance") or 0
+        total += balance
+        result.append({
+            "id": acc.get("id"),
+            "name": acc.get("name"),
+            "type": acc.get("type"),
+            "balance": balance,
+        })
+    return {"total_balance": round(total, 2), "accounts": result}
+
+# ── MCP Resources — catálogos ligeros ─────────────────────────────────────────
+
+@mcp.resource("cuentica://catalog/customers")
+def catalog_customers() -> list:
+    """Catálogo de clientes: id, tradename, cif, email. Útil para buscar IDs antes de crear facturas."""
+    data = api_get("/customer", {"page": 1, "page_size": MAX_PAGE_SIZE})
+    return [_summary_customer(c) for c in data]
+
+@mcp.resource("cuentica://catalog/providers")
+def catalog_providers() -> list:
+    """Catálogo de proveedores: id, tradename, cif, email. Útil para buscar IDs antes de crear gastos."""
+    data = api_get("/provider", {"page": 1, "page_size": MAX_PAGE_SIZE})
+    return [_summary_provider(p) for p in data]
+
+@mcp.resource("cuentica://catalog/accounts")
+def catalog_accounts() -> list:
+    """Catálogo de cuentas bancarias: id, name, type, balance. Útil para obtener IDs de cuentas."""
+    accounts = api_get("/account")
+    return [{"id": a.get("id"), "name": a.get("name"), "type": a.get("type"), "balance": a.get("balance")} for a in accounts]
+
+@mcp.resource("cuentica://catalog/tags")
+def catalog_tags() -> list:
+    """Catálogo de etiquetas disponibles: id, name."""
+    tags = api_get("/tag")
+    return [{"id": t.get("id"), "name": t.get("name")} for t in tags]
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
