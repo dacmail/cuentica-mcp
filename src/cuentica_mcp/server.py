@@ -128,15 +128,20 @@ def _all_pages(path: str, params: dict) -> list:
 
 def _summary_invoice(inv: dict) -> dict:
     cust = inv.get("customer") or {}
-    ri = inv.get("register_info") or {}
+    ri   = inv.get("register_info") or {}
+    amt  = inv.get("amount_details") or {}
+    charges = inv.get("charges") or []
+    all_paid = bool(charges) and all(c.get("paid") for c in charges)
     return {
         "id": inv.get("id"),
-        "number": inv.get("number"),
+        "number": inv.get("invoice_number"),
+        "serie": inv.get("invoice_serie"),
         "date": inv.get("date"),
         "customer": cust.get("tradename") or cust.get("business_name"),
-        "total": inv.get("total"),
+        "total": amt.get("total_amount"),
+        "total_left": amt.get("total_left"),
         "status": ri.get("status_description"),
-        "paid": ri.get("paid"),
+        "paid": all_paid,
     }
 
 def _summary_expense(exp: dict) -> dict:
@@ -928,22 +933,26 @@ def get_pending_collections(year: Optional[int] = None) -> dict:
 
     pending = []
     for inv in all_invoices:
-        ri = inv.get("register_info") or {}
+        ri  = inv.get("register_info") or {}
+        amt = inv.get("amount_details") or {}
         if ri.get("status_description") == "voided":
             continue
-        if ri.get("paid"):
+        total_left = amt.get("total_left") or 0
+        if total_left <= 0:
             continue
         cust = inv.get("customer") or {}
         pending.append({
             "id": inv.get("id"),
-            "number": inv.get("number"),
+            "number": inv.get("invoice_number"),
+            "serie": inv.get("invoice_serie"),
             "date": inv.get("date"),
             "customer": cust.get("tradename") or cust.get("business_name"),
-            "total": inv.get("total"),
+            "total": amt.get("total_amount"),
+            "total_left": total_left,
             "status": ri.get("status_description"),
         })
 
-    total = sum((p.get("total") or 0) for p in pending)
+    total = sum((p.get("total_left") or 0) for p in pending)
     return {"count": len(pending), "total_pending": round(total, 2), "invoices": pending}
 
 @mcp.tool(annotations=_READ)
@@ -971,20 +980,14 @@ def get_quarterly_vat_summary(year: int, quarter: int) -> dict:
     inv_base = inv_vat = inv_retention = 0.0
     valid_invoices = 0
     for inv in invoices:
-        ri = inv.get("register_info") or {}
+        ri  = inv.get("register_info") or {}
+        amt = inv.get("amount_details") or {}
         if ri.get("status_description") == "voided":
             continue
         valid_invoices += 1
-        for line in inv.get("invoice_lines") or []:
-            qty      = line.get("quantity") or 1
-            price    = line.get("amount") or 0
-            disc_pct = (line.get("discount") or 0) / 100
-            base     = qty * price * (1 - disc_pct)
-            tax_pct  = (line.get("tax") or 0) / 100
-            ret_pct  = (line.get("retention") or 0) / 100
-            inv_base      += base
-            inv_vat       += base * tax_pct
-            inv_retention += base * ret_pct
+        inv_base      += amt.get("total_base") or 0
+        inv_vat       += amt.get("total_vat") or amt.get("total_tax") or 0
+        inv_retention += amt.get("total_retention") or 0
 
     exp_base = exp_vat = 0.0
     for exp in expenses:
